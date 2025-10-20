@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TEDx Al Qassaa - 40 Minute Break Timer</title>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #1a1a2e, #16213e);
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+        }
+        
+        .container {
+            text-align: center;
+            padding: 2rem;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.2);
+            width: 90%;
+            max-width: 500px;
+        }
+        
+        h1 {
+            color: white;
+            margin-bottom: 1.5rem;
+            font-size: 2.5rem;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+        
+        .base-timer {
+            position: relative;
+            width: 300px;
+            height: 300px;
+            margin: 0 auto;
+        }
+        
+        .base-timer__svg {
+            transform: scaleX(-1);
+            width: 100%;
+            height: 100%;
+        }
+        
+        .base-timer__circle {
+            fill: none;
+            stroke: rgba(255, 255, 255, 0.1);
+            stroke-width: 7;
+        }
+        
+        .base-timer__path-elapsed {
+            stroke: rgba(255, 255, 255, 0.3);
+            stroke-width: 7;
+        }
+        
+        .base-timer__path-remaining {
+            stroke-width: 7;
+            stroke-linecap: round;
+            transform: rotate(90deg);
+            transform-origin: center;
+            transition: 1s linear all;
+            stroke: currentColor;
+        }
+        
+        .base-timer__label {
+            position: absolute;
+            width: 300px;
+            height: 300px;
+            top: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 5rem;
+            font-weight: bold;
+            color: white;
+        }
+        
+        .status-text {
+            margin-top: 2rem;
+            font-size: 1.5rem;
+            color: white;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+            min-height: 1.5em;
+        }
+        
+        .warning {
+            color: #fca311 !important;
+            text-shadow: 0 0 20px rgba(252, 163, 17, 0.4);
+        }
+
+        .info {
+            color: #22c55e !important; /* green */
+            text-shadow: 0 0 18px rgba(34,197,94,0.25);
+        }
+        
+        .alert {
+            color: #e63946 !important;
+            text-shadow: 0 0 20px rgba(230, 57, 70, 0.4);
+            animation: pulse 1s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+        
+        .logo {
+            margin-top: 1rem;
+            color: red;
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 style="color: white;">TEDx <span style="color: #e63946;">Al Qassaa</span></h1>
+        <div class="base-timer">
+            <svg class="base-timer__svg" viewBox="0 0 100 100">
+                <g class="base-timer__circle">
+                    <circle class="base-timer__path-elapsed" cx="50" cy="50" r="45"></circle>
+                    <path 
+                        id="base-timer-path-remaining"
+                        class="base-timer__path-remaining info"
+                        d="
+                            M 50, 50
+                            m -45, 0
+                            a 45,45 0 1,0 90,0
+                            a 45,45 0 1,0 -90,0
+                        "
+                    ></path>
+                </g>
+            </svg>
+            <span id="base-timer-label" class="base-timer__label">40:00</span>
+        </div>
+    <div id="statusText" class="status-text">Break Time</div>
+    <!-- Place your final announcement audio file in the project (see instructions in code comments) -->
+    <div id="announce-status" style="margin-top:.6rem;color:lightgreen;font-size:0.95rem;min-height:1.2em;text-align:center"></div>
+    <div class="logo">TEDx</div>
+    </div>
+
+    <script>
+        // Timer Settings
+        const FULL_DASH_ARRAY = 283;
+        const TIME_LIMIT = 2400; // 40 minutes in seconds
+        let timePassed = 0;
+        let timeLeft = TIME_LIMIT;
+        let timerInterval = null;
+        let hasFinished = false;
+
+        // Color thresholds
+        const COLOR_CODES = {
+            info: {
+                color: "green",
+                // when elapsed < warningElapsed -> info
+                threshold: TIME_LIMIT * 0.67 // 27 minutes elapsed threshold for alert
+            },
+            warning: {
+                color: "orange",
+                // when elapsed >= warningElapsed -> warning
+                threshold: TIME_LIMIT * 0.33 // 13 minutes elapsed threshold for warning
+            },
+            alert: {
+                color: "red",
+                threshold: 0
+            }
+        };
+
+        // Format time as MM:SS
+        function formatTime(time) {
+            const minutes = Math.floor(time / 60);
+            let seconds = time % 60;
+            if (seconds < 10) {
+                seconds = `0${seconds}`;
+            }
+            return `${minutes}:${seconds}`;
+        }
+
+        // Calculate the fraction of the time remaining
+        function calculateTimeFraction() {
+            const rawTimeFraction = timeLeft / TIME_LIMIT;
+            return rawTimeFraction - (1 / TIME_LIMIT) * (1 - rawTimeFraction);
+        }
+
+        // Update the circle dasharray
+        function setCircleDasharray() {
+            const circleDasharray = `${(calculateTimeFraction() * FULL_DASH_ARRAY).toFixed(0)} 283`;
+            document.getElementById("base-timer-path-remaining").setAttribute("stroke-dasharray", circleDasharray);
+        }
+
+        // Set the color of the remaining path
+        function setRemainingPathColor(timeLeft) {
+            const { alert, warning, info } = COLOR_CODES;
+            const pathEl = document.getElementById("base-timer-path-remaining");
+            const labelEl = document.getElementById("base-timer-label");
+            // Use elapsed time (timePassed) for threshold checks so colors change at elapsed minutes
+            const elapsed = timePassed; // seconds elapsed since start
+            const warningElapsed = warning.threshold; // 0.33 * TIME_LIMIT ≈ 13.2 min
+            const alertElapsed = info.threshold; // 0.67 * TIME_LIMIT ≈ 26.8 min
+
+            if (elapsed >= alertElapsed) {
+                pathEl.classList.remove("warning","info");
+                pathEl.classList.add("alert");
+                document.getElementById("statusText").textContent = "Time's Up!";
+                document.getElementById("statusText").className = "status-text alert";
+            } else if (elapsed >= warningElapsed) {
+                pathEl.classList.remove("info","alert");
+                pathEl.classList.add("warning");
+                labelEl.className = "base-timer__label warning";
+                const minutesLeft = Math.ceil((TIME_LIMIT - elapsed) / 60);
+                document.getElementById("statusText").textContent = minutesLeft + " Minutes Remaining";
+                document.getElementById("statusText").className = "status-text warning";
+            } else {
+                pathEl.classList.remove("warning","alert");
+                pathEl.classList.add("info");
+                labelEl.className = "base-timer__label";
+                document.getElementById("statusText").textContent = "Break Time";
+                document.getElementById("statusText").className = "status-text";
+            }
+        }
+
+        // Update the timer display
+        function updateTimer() {
+            timePassed += 1;
+            timeLeft = TIME_LIMIT - timePassed;
+            
+            document.getElementById("base-timer-label").innerHTML = formatTime(timeLeft);
+            setCircleDasharray();
+            setRemainingPathColor(timeLeft);
+
+            // Announce when remaining time hits 30/20/10 minutes (timeLeft in seconds)
+            if(timeLeft !== TIME_LIMIT && timeLeft % 600 === 0){
+                // Update status text at 30/20/10 minutes remaining, but DO NOT play audio here.
+                const minutesRemaining = timeLeft / 60; // 30,20,10,0
+                const lang = document.documentElement.lang || 'en';
+                document.getElementById('statusText').textContent = (lang.startsWith('ar')) ? `تبقى ${minutesRemaining} دقيقة` : `${minutesRemaining} minutes remaining`;
+                console.log('Tick (no audio):', minutesRemaining, 'minutes remaining');
+            }
+            
+            if (timeLeft === 0) {
+                clearInterval(timerInterval);
+                hasFinished = true;
+                // Optional: Play sound when timer ends
+                playFinalAudio();
+            }
+        }
+
+        // --- Audio handling ---
+        // WebAudio beep for 10-minute ticks
+        function playBeep(){
+            try{
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const o = ctx.createOscillator();
+                const g = ctx.createGain();
+                o.type = 'sine';
+                o.frequency.value = 880;
+                g.gain.value = 0.06;
+                o.connect(g);
+                g.connect(ctx.destination);
+                o.start();
+                g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.25);
+                o.stop(ctx.currentTime + 0.26);
+            }catch(e){
+                console.warn('Beep failed', e);
+            }
+        }
+
+    // Try to load a final announcement audio file from known locations (no file picker)
+    // Put your file in one of these locations relative to the timer HTML file, for example:
+    //  - ./announcement.mp3   (preferred)
+    //  - ./announcement.wav
+    //  - ./final.mp3
+    //  - ./audio/announcement.mp3
+    // If running from the file:// protocol some browsers block fetch; use a simple local server
+    // (python -m http.server) when testing.
+    let finalAudioURL = null;
+    let finalAudioEl = null;
+    const possiblePaths = ['announcement.mp3','announcement.wav','final.mp3','final.wav','audio/announcement.mp3','audio/final.mp3','../final.mp3'];
+
+        async function findFinalAudio(){
+            for(const p of possiblePaths){
+                try{
+                    const resp = await fetch(p, {method:'HEAD'});
+                    if(resp.ok){
+                        finalAudioURL = p; // use direct path
+                        finalAudioEl = new Audio(finalAudioURL);
+                        finalAudioEl.preload = 'auto';
+                        if(document.getElementById('announce-status')){
+                            document.getElementById('announce-status').textContent = 'Announcement found: ' + p;
+                        }
+                        console.log('Found final audio at', p);
+                        return;
+                    }
+                }catch(e){
+                    // fetch may fail on file:// — ignore
+                }
+            }
+            
+        }
+
+        function playFinalAudio(){
+            if(finalAudioEl){
+                const a = new Audio(finalAudioURL);
+                finalAudioEl.play().catch(()=>console.warn('Playback prevented; user gesture required'));
+            } else {
+                playBeep();
+            }
+        }
+
+        // Speech synthesis helper (returns true if speak attempted)
+        function speak(text){
+            try{
+                if('speechSynthesis' in window){
+                    const utter = new SpeechSynthesisUtterance(text);
+                    // pick voice language based on document language
+                    const lang = document.documentElement.lang || 'en-US';
+                    utter.lang = lang;
+                    utter.rate = 1;
+                    utter.pitch = 1;
+                    window.speechSynthesis.cancel();
+                    window.speechSynthesis.speak(utter);
+                    return true;
+                }
+            }catch(e){
+                console.warn('Speech failed', e);
+            }
+            return false;
+        }
+
+        // Kick off search for final audio on load
+        findFinalAudio();
+
+        // Start the timer when page loads
+        window.onload = function() {
+            document.getElementById("statusText").textContent = "Break Time";
+            timerInterval = setInterval(updateTimer, 1000);
+        };
+
+        // Optional: Add click to reset functionality
+        document.querySelector('.base-timer').addEventListener('click', function() {
+            if (hasFinished) {
+                timePassed = 0;
+                timeLeft = TIME_LIMIT;
+                hasFinished = false;
+                document.getElementById("base-timer-label").innerHTML = formatTime(timeLeft);
+                document.getElementById("base-timer-path-remaining").classList.remove("alert", "warning");
+                document.getElementById("base-timer-path-remaining").classList.add("info");
+                document.getElementById("base-timer-label").className = "base-timer__label";
+                document.getElementById("statusText").textContent = "Break Time";
+                document.getElementById("statusText").className = "status-text";
+                setCircleDasharray();
+                timerInterval = setInterval(updateTimer, 1000);
+            }
+        });
+    </script>
+</body>
+</html>
