@@ -147,13 +147,19 @@
     </div>
 
     <script>
-        // Timer Settings
-        const FULL_DASH_ARRAY = 283;
-        const TIME_LIMIT = 2400; // 40 minutes in seconds
-        let timePassed = 0;
-        let timeLeft = TIME_LIMIT;
-        let timerInterval = null;
-        let hasFinished = false;
+    // Timer Settings
+    const FULL_DASH_ARRAY = 283;
+    const TIME_LIMIT = 2400; // 40 minutes in seconds
+    let timePassed = 0;
+    let timeLeft = TIME_LIMIT;
+    let timerInterval = null;
+    let hasFinished = false;
+
+    // Persistence keys
+    const STORAGE_KEY_END_AT = 'tedx_timer_end_at_v1';
+
+    // Whether the timer was started by the user/session
+    // For this page we treat loading as start (auto-start) but persist end time so reload cannot reset.
 
         // Color thresholds
         const COLOR_CODES = {
@@ -248,7 +254,11 @@
                 clearInterval(timerInterval);
                 hasFinished = true;
                 // Optional: Play sound when timer ends
-                playFinalAudio();
+                    playFinalAudio();
+                    // Clear persisted endAt and remove navigation guards
+                    clearSavedEndAt();
+                    try{ window.removeEventListener('beforeunload', beforeUnloadHandler); }catch(e){}
+                    try{ window.removeEventListener('keydown', keydownHandler); }catch(e){}
             }
         }
 
@@ -337,11 +347,131 @@
         // Kick off search for final audio on load
         findFinalAudio();
 
-        // Start the timer when page loads
-        window.onload = function() {
+        // --- Persistence and anti-refresh protections ---
+        function saveEndAt(endAt) {
+            // Try localStorage first
+            try {
+                localStorage.setItem(STORAGE_KEY_END_AT, String(endAt));
+            } catch (e) {
+                console.warn('Could not persist timer end time to localStorage', e);
+            }
+            // Also persist to a cookie as a fallback (expires at endAt)
+            try{
+                const expires = new Date(Number(endAt)).toUTCString();
+                document.cookie = STORAGE_KEY_END_AT + '=' + encodeURIComponent(String(endAt)) + '; path=/; expires=' + expires + '; SameSite=Lax';
+            }catch(e){ /* ignore cookie failures */ }
+        }
+
+        function clearSavedEndAt(){
+            try{ localStorage.removeItem(STORAGE_KEY_END_AT); }catch(e){}
+            try{
+                // remove cookie by setting expiry in the past
+                document.cookie = STORAGE_KEY_END_AT + '=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
+            }catch(e){}
+        }
+
+        function getSavedEndAt(){
+            try{
+                let v = null;
+                try{
+                    v = localStorage.getItem(STORAGE_KEY_END_AT);
+                }catch(e){ v = null; }
+                if(!v){
+                    // fallback to cookie
+                    try{
+                        const cookies = document.cookie ? document.cookie.split('; ') : [];
+                        for(const c of cookies){
+                            if(c.indexOf(STORAGE_KEY_END_AT + '=') === 0){
+                                v = decodeURIComponent(c.split('=')[1] || '');
+                                break;
+                            }
+                        }
+                    }catch(e){ /* ignore */ }
+                }
+                if(!v) return null;
+                const n = Number(v);
+                return Number.isFinite(n) ? n : null;
+            }catch(e){ return null; }
+        }
+
+        // Prevent accidental refresh/navigation while timer is running
+        function beforeUnloadHandler(e){
+            if(!hasFinished){
+                // Standard message is ignored by modern browsers but returning a string triggers the confirmation dialog
+                const msg = 'The break timer is running. Reloading will not stop the timer but may interrupt the experience. Are you sure?';
+                e.returnValue = msg;
+                return msg;
+            }
+        }
+
+        // Block common refresh keys while timer active
+        function keydownHandler(e){
+            if(hasFinished) return;
+            // F5 (116), Ctrl+R, Cmd+R
+            const isF5 = e.key === 'F5' || e.keyCode === 116;
+            const isCtrlR = (e.ctrlKey || e.metaKey) && (e.key === 'r' || e.key === 'R' || e.keyCode === 82);
+            if(isF5 || isCtrlR){
+                e.preventDefault();
+                // show a brief message
+                const st = document.getElementById('statusText');
+                const prev = st.textContent;
+                st.textContent = 'Cannot refresh until timer ends';
+                st.className = 'status-text warning';
+                setTimeout(()=>{
+                    if(!hasFinished){ st.textContent = prev; st.className = 'status-text'; }
+                }, 2000);
+                return false;
+            }
+        }
+
+        // Start or resume the timer when page loads
+        window.addEventListener('load', function() {
             document.getElementById("statusText").textContent = "Break Time";
-            timerInterval = setInterval(updateTimer, 1000);
-        };
+
+            // Check if an end timestamp is stored (ms since epoch)
+            const savedEndAt = getSavedEndAt();
+            const now = Date.now();
+            let savedSource = 'none';
+            if(savedEndAt && savedEndAt > now){
+                // resume: compute timeLeft
+                timeLeft = Math.ceil((savedEndAt - now) / 1000);
+                if(timeLeft < 0) timeLeft = 0;
+                timePassed = TIME_LIMIT - timeLeft;
+                // determine whether it came from localStorage or cookie (best-effort)
+                try{
+                    const rawLocal = localStorage.getItem(STORAGE_KEY_END_AT);
+                    if(rawLocal && Number(rawLocal) === savedEndAt) savedSource = 'localStorage';
+                    else savedSource = 'cookie';
+                }catch(e){ savedSource = 'cookie'; }
+                // re-save to ensure both localStorage and cookie exist (helps persistence across environments)
+                try{ saveEndAt(savedEndAt); }catch(e){}
+            } else {
+                // no saved timer or expired: create new endAt and persist it
+                const endAt = now + TIME_LIMIT * 1000;
+                saveEndAt(endAt);
+                timeLeft = TIME_LIMIT;
+                timePassed = 0;
+                savedSource = 'new';
+            }
+
+            
+            // start ticking
+            setCircleDasharray();
+            timerInterval = setInterval(function(){
+                // If persisted endAt disappears while running, stop to be safe
+                const currentSaved = getSavedEndAt();
+                if(!currentSaved){
+                    // If storage was cleared, keep running but re-save based on current timeLeft
+                    const newEndAt = Date.now() + timeLeft * 1000;
+                    saveEndAt(newEndAt);
+                }
+                updateTimer();
+            }, 1000);
+
+            // Attach handlers to block refresh/navigation
+            window.addEventListener('beforeunload', beforeUnloadHandler);
+            window.addEventListener('keydown', keydownHandler, {capture:false});
+        });
 
         // Optional: Add click to reset functionality
         document.querySelector('.base-timer').addEventListener('click', function() {
@@ -356,6 +486,9 @@
                 document.getElementById("statusText").textContent = "Break Time";
                 document.getElementById("statusText").className = "status-text";
                 setCircleDasharray();
+                // Start a fresh timer and persist new endAt
+                const endAt = Date.now() + TIME_LIMIT * 1000;
+                saveEndAt(endAt);
                 timerInterval = setInterval(updateTimer, 1000);
             }
         });
